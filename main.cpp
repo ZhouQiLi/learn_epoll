@@ -43,7 +43,7 @@ bool Listen(SOCKET sock) {
     return true;
 }
 
-int BindAndListen(const std::string &ip, uint16_t port) {
+SOCKET BindAndListen(const std::string &ip, uint16_t port) {
     auto sock = CreateSocket();
     if (sock == INVALID_SOCKET) {
         std::cerr << "create socket failed. error: " << GetLastError() << std::endl;
@@ -55,7 +55,7 @@ int BindAndListen(const std::string &ip, uint16_t port) {
         return -1;
     }
 
-    return static_cast<int>(sock);
+    return sock;
 }
 
 void AddEvent(HANDLE epollBase, SOCKET sock, int event) {
@@ -72,7 +72,7 @@ void ModEvent(HANDLE epollBase, SOCKET sock, int event) {
     epoll_ctl(epollBase, EPOLL_CTL_MOD, sock, &ev);
 }
 
-void DelEvent(HANDLE epollBase, int sock) {
+void DelEvent(HANDLE epollBase, SOCKET sock) {
     epoll_ctl(epollBase, EPOLL_CTL_DEL, sock, nullptr);
 }
 
@@ -101,7 +101,7 @@ void DoAccept(HANDLE epollBase, SOCKET listenSock) {
     AddEvent(epollBase, fd, EPOLLIN);
 }
 
-void DoRead(HANDLE epollBase, int sock, char *buf) {
+void DoRead(HANDLE epollBase, SOCKET sock, char *buf) {
     std::cout << "on read event" << std::endl;
     // 获取数据
     int readCount = recv(sock, buf, MAXSIZE, 0);
@@ -117,17 +117,30 @@ void DoRead(HANDLE epollBase, int sock, char *buf) {
     } else {
         // echo
         std::cout << "client message is: " << buf << std::endl;
-        ModEvent(epollBase, sock, EPOLLOUT);
+        int writeCount = send(sock, buf, strlen(buf), 0);
+        if (writeCount < 0) {
+            if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
+                std::cout << "wait next write event." << std::endl;
+                ModEvent(epollBase, sock, EPOLLOUT);
+                return;
+            } else {
+                std::cerr << "write failed. err: " << errno << std::endl;
+                closesocket(sock);
+                DelEvent(epollBase, sock);
+            }
+        }
+
+        memset(buf,0,MAXSIZE);
     }
 }
 
-void DoWrite(HANDLE epollBase, int sock, char *buf) {
+void DoWrite(HANDLE epollBase, SOCKET sock, char *buf) {
     std::cout << "on write event." << std::endl;
 
     int writeCount = send(sock, buf, strlen(buf), 0);
     if (writeCount < 0) {
         if (errno == EWOULDBLOCK || errno == EAGAIN || errno == EINTR) {
-            std::cerr << "wait next write event." << std::endl;
+            std::cout << "wait next write event." << std::endl;
         } else {
             std::cerr << "write failed. err: " << errno << std::endl;
             closesocket(sock);
